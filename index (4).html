@@ -1,0 +1,1775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Geometric Painter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            touch-action: none; /* Prevent touch scrolling */
+        }
+        #root {
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Scrollbar styling for control panel */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(107, 181, 199, 0.3);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(107, 181, 199, 0.5);
+        }
+    </style>
+    <!-- Load Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@300;400;600&family=Cormorant+Garamond:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="root"></div>
+    
+    <!-- Load React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- The App -->
+    <script type="text/babel">
+
+const { useRef, useEffect, useState } = React;
+
+const GeometricPainter = () => {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [selectedColor, setSelectedColor] = useState('#6bb5c7');
+  const [brushSize, setBrushSize] = useState(40);
+  const [brushMode, setBrushMode] = useState('segments');
+  const [opacity, setOpacity] = useState(0.7);
+  const [lineWeight, setLineWeight] = useState(1);
+  const [shapeMode, setShapeMode] = useState(null);
+  const [showUI, setShowUI] = useState(true);
+  const [isHolding, setIsHolding] = useState(false);
+  const [bleedEnabled, setBleedEnabled] = useState(false);
+  const [blendMode, setBlendMode] = useState(false);
+  const [fillMode, setFillMode] = useState(false);
+  const [fillPattern, setFillPattern] = useState('solid');
+  const [symmetryMode, setSymmetryMode] = useState('none');
+  const [mirrorAngle, setMirrorAngle] = useState(90);
+  const [canUndo, setCanUndo] = useState(false);
+  const [showInstructions, setShowInstructions] = useState(true);
+  const [panelPosition, setPanelPosition] = useState({ x: 30, y: 30 });
+  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [shapeFilled, setShapeFilled] = useState(false);
+  
+  const undoHistoryRef = useRef([]);
+  const maxUndoSteps = 20;
+  
+  const colorPalette = [
+    { name: 'Cyan Glow', color: '#6bb5c7' },
+    { name: 'Deep Teal', color: '#1a3a3a' },
+    { name: 'Azure', color: '#4a8a9e' },
+    { name: 'Golden', color: '#e6a660' },
+    { name: 'Coral', color: '#e87a6a' },
+    { name: 'Amber', color: '#d4854d' },
+    { name: 'Cream', color: '#f4e8d4' },
+    { name: 'Turquoise', color: '#7acab5' },
+    { name: 'Violet', color: '#8a5a8a' },
+    { name: 'Rose', color: '#c45a4a' },
+    { name: 'Sage', color: '#5a9a8a' },
+    { name: 'Midnight', color: '#0d2d3d' },
+    { name: 'Background', color: '#0a0a0a' }
+  ];
+  
+  const lastPosRef = useRef({ x: 0, y: 0 });
+  const bleedAnimationRef = useRef(null);
+  const bleedStateRef = useRef({ x: 0, y: 0, radius: 0, maxRadius: 0 });
+  
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    saveToHistory();
+    
+    const handleKeyPress = (e) => {
+      if (e.key === 'h' || e.key === 'H') {
+        setShowUI(prev => !prev);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        undo();
+      }
+    };
+    
+    // Panel drag handlers - these now work for both mouse and touch
+    const handleGlobalMove = (e) => {
+      if (isDraggingPanel) {
+        e.preventDefault();
+        const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+        const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+        
+        setPanelPosition({
+          x: clientX - dragOffset.x,
+          y: clientY - dragOffset.y
+        });
+      }
+    };
+    
+    const handleGlobalEnd = () => {
+      setIsDraggingPanel(false);
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    window.addEventListener('mousemove', handleGlobalMove);
+    window.addEventListener('touchmove', handleGlobalMove);
+    window.addEventListener('mouseup', handleGlobalEnd);
+    window.addEventListener('touchend', handleGlobalEnd);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyPress);
+      window.removeEventListener('mousemove', handleGlobalMove);
+      window.removeEventListener('touchmove', handleGlobalMove);
+      window.removeEventListener('mouseup', handleGlobalEnd);
+      window.removeEventListener('touchend', handleGlobalEnd);
+    };
+  }, [isDraggingPanel, dragOffset]);
+  
+  const saveToHistory = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const imageData = canvas.toDataURL();
+    undoHistoryRef.current.push(imageData);
+    
+    if (undoHistoryRef.current.length > maxUndoSteps) {
+      undoHistoryRef.current.shift();
+    }
+    
+    setCanUndo(undoHistoryRef.current.length > 1);
+  };
+  
+  const undo = () => {
+    if (undoHistoryRef.current.length <= 1) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    undoHistoryRef.current.pop();
+    
+    const previousState = undoHistoryRef.current[undoHistoryRef.current.length - 1];
+    
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = previousState;
+    
+    setCanUndo(undoHistoryRef.current.length > 1);
+  };
+  
+  const applySymmetry = (ctx, x, y, drawFunction) => {
+    const canvas = ctx.canvas;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    if (symmetryMode === 'none') {
+      drawFunction(x, y);
+    } else if (symmetryMode === 'mirror') {
+      drawFunction(x, y);
+      
+      const angleRad = (mirrorAngle * Math.PI) / 180;
+      
+      const relX = x - centerX;
+      const relY = y - centerY;
+      
+      const cos2a = Math.cos(2 * angleRad);
+      const sin2a = Math.sin(2 * angleRad);
+      
+      const mirrorX = relX * cos2a + relY * sin2a;
+      const mirrorY = relX * sin2a - relY * cos2a;
+      
+      const finalX = mirrorX + centerX;
+      const finalY = mirrorY + centerY;
+      
+      drawFunction(finalX, finalY);
+    }
+  };
+  
+  // Helper to get coordinates from mouse or touch event
+  const getEventCoords = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    
+    if (e.touches && e.touches.length > 0) {
+      // Touch event
+      return {
+        x: e.touches[0].clientX - rect.left,
+        y: e.touches[0].clientY - rect.top
+      };
+    } else {
+      // Mouse event
+      return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
+    }
+  };
+  
+  // Drawing functions (keeping existing implementations)
+  const drawSegmentedLine = (ctx, x1, y1, x2, y2) => {
+    const distance = Math.hypot(x2 - x1, y2 - y1);
+    const segments = Math.max(3, Math.floor(distance / 20));
+    
+    ctx.lineWidth = lineWeight;
+    ctx.strokeStyle = selectedColor;
+    ctx.globalAlpha = opacity;
+    ctx.lineCap = 'round';
+    
+    for (let i = 0; i < segments; i++) {
+      const t1 = i / segments;
+      const t2 = (i + 0.6) / segments;
+      
+      const sx = x1 + (x2 - x1) * t1;
+      const sy = y1 + (y2 - y1) * t1;
+      const ex = x1 + (x2 - x1) * t2;
+      const ey = y1 + (y2 - y1) * t2;
+      
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawDots = (ctx, x, y) => {
+    ctx.fillStyle = selectedColor;
+    ctx.globalAlpha = opacity;
+    
+    const dotCount = Math.floor(brushSize / 8);
+    for (let i = 0; i < dotCount; i++) {
+      const angle = (Math.PI * 2 * i) / dotCount;
+      const radius = brushSize * 0.4;
+      const dx = x + Math.cos(angle) * radius;
+      const dy = y + Math.sin(angle) * radius;
+      
+      ctx.beginPath();
+      ctx.arc(dx, dy, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawRadials = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.lineWidth = lineWeight;
+    ctx.globalAlpha = opacity;
+    ctx.lineCap = 'round';
+    
+    const rayCount = 12;
+    for (let i = 0; i < rayCount; i++) {
+      const angle = (Math.PI * 2 * i) / rayCount;
+      const innerRadius = brushSize * 0.2;
+      const outerRadius = brushSize * 0.8;
+      
+      const x1 = x + Math.cos(angle) * innerRadius;
+      const y1 = y + Math.sin(angle) * innerRadius;
+      const x2 = x + Math.cos(angle) * outerRadius;
+      const y2 = y + Math.sin(angle) * outerRadius;
+      
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawCrosshatch = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.lineWidth = lineWeight;
+    ctx.globalAlpha = opacity * 0.5;
+    ctx.lineCap = 'round';
+    
+    const size = brushSize;
+    const spacing = 8;
+    
+    for (let i = -size; i < size; i += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(x - size + i, y - size);
+      ctx.lineTo(x + size + i, y + size);
+      ctx.stroke();
+    }
+    
+    for (let i = -size; i < size; i += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(x - size + i, y + size);
+      ctx.lineTo(x + size + i, y - size);
+      ctx.stroke();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawStipple = (ctx, x, y) => {
+    ctx.fillStyle = selectedColor;
+    ctx.globalAlpha = opacity * 0.6;
+    
+    const dotCount = 30;
+    for (let i = 0; i < dotCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = Math.random() * brushSize;
+      const dx = x + Math.cos(angle) * radius;
+      const dy = y + Math.sin(angle) * radius;
+      const size = Math.random() * 1.5 + 0.5;
+      
+      ctx.beginPath();
+      ctx.arc(dx, dy, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawFineLine = (ctx, x1, y1, x2, y2) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.lineWidth = lineWeight * 0.5;
+    ctx.globalAlpha = opacity;
+    ctx.lineCap = 'round';
+    
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawConcentricCircles = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.fillStyle = selectedColor;
+    ctx.lineWidth = lineWeight;
+    ctx.globalAlpha = opacity;
+    
+    const rings = 8;
+    for (let i = 1; i <= rings; i++) {
+      const radius = (brushSize * i) / rings;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      if (shapeFilled) {
+        ctx.fill();
+      } else {
+        ctx.stroke();
+      }
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawRadiantBurst = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.globalAlpha = opacity;
+    ctx.lineCap = 'round';
+    
+    const rayCount = 24;
+    for (let i = 0; i < rayCount; i++) {
+      const angle = (Math.PI * 2 * i) / rayCount;
+      const length = brushSize * (0.5 + Math.random() * 0.5);
+      const width = lineWeight * (1 + Math.random());
+      
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(
+        x + Math.cos(angle) * length,
+        y + Math.sin(angle) * length
+      );
+      ctx.stroke();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawMeshCircle = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.fillStyle = selectedColor;
+    ctx.lineWidth = lineWeight;
+    ctx.globalAlpha = opacity * 0.5;
+    
+    // Outer circle
+    ctx.beginPath();
+    ctx.arc(x, y, brushSize, 0, Math.PI * 2);
+    if (shapeFilled) {
+      ctx.globalAlpha = opacity;
+      ctx.fill();
+      ctx.globalAlpha = opacity * 0.5;
+    } else {
+      ctx.stroke();
+    }
+    
+    if (!shapeFilled) {
+      // Internal grid (only for outline mode)
+      const divisions = 8;
+      for (let i = 0; i < divisions; i++) {
+        const angle = (Math.PI * 2 * i) / divisions;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(
+          x + Math.cos(angle) * brushSize,
+          y + Math.sin(angle) * brushSize
+        );
+        ctx.stroke();
+      }
+      
+      // Inner rings
+      for (let r = 0.3; r < 1; r += 0.35) {
+        ctx.beginPath();
+        ctx.arc(x, y, brushSize * r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawSpiral = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.lineWidth = lineWeight;
+    ctx.globalAlpha = opacity;
+    ctx.lineCap = 'round';
+    
+    ctx.beginPath();
+    const turns = 4;
+    const steps = 100;
+    
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const angle = t * Math.PI * 2 * turns;
+      const radius = t * brushSize;
+      
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      
+      if (i === 0) {
+        ctx.moveTo(px, py);
+      } else {
+        ctx.lineTo(px, py);
+      }
+    }
+    
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawMandala = (ctx, x, y) => {
+    ctx.strokeStyle = selectedColor;
+    ctx.fillStyle = selectedColor;
+    ctx.lineWidth = lineWeight;
+    ctx.globalAlpha = opacity * 0.7;
+    ctx.lineCap = 'round';
+    
+    const petals = 12;
+    for (let i = 0; i < petals; i++) {
+      const angle = (Math.PI * 2 * i) / petals;
+      
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(
+        brushSize * 0.3, -brushSize * 0.3,
+        brushSize * 0.6, 0
+      );
+      ctx.quadraticCurveTo(
+        brushSize * 0.3, brushSize * 0.3,
+        0, 0
+      );
+      
+      if (shapeFilled) {
+        ctx.fill();
+      } else {
+        ctx.stroke();
+      }
+      
+      ctx.restore();
+    }
+    
+    // Center circle
+    ctx.beginPath();
+    ctx.arc(x, y, brushSize * 0.15, 0, Math.PI * 2);
+    if (shapeFilled) {
+      ctx.fill();
+    } else {
+      ctx.stroke();
+    }
+    
+    ctx.globalAlpha = 1;
+  };
+  
+  const drawBlend = (ctx, x, y, lastX, lastY) => {
+    const canvas = ctx.canvas;
+    const radius = Math.floor(brushSize / 2);
+    
+    const imageData = ctx.getImageData(
+      Math.max(0, x - radius),
+      Math.max(0, y - radius),
+      Math.min(radius * 2, canvas.width - (x - radius)),
+      Math.min(radius * 2, canvas.height - (y - radius))
+    );
+    
+    const data = imageData.data;
+    const width = imageData.width;
+    const height = imageData.height;
+    const tempData = new Uint8ClampedArray(data);
+    
+    for (let py = 1; py < height - 1; py++) {
+      for (let px = 1; px < width - 1; px++) {
+        const i = (py * width + px) * 4;
+        let r = 0, g = 0, b = 0, count = 0;
+        
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const ni = ((py + dy) * width + (px + dx)) * 4;
+            r += tempData[ni];
+            g += tempData[ni + 1];
+            b += tempData[ni + 2];
+            count++;
+          }
+        }
+        
+        data[i] = r / count;
+        data[i + 1] = g / count;
+        data[i + 2] = b / count;
+      }
+    }
+    
+    ctx.putImageData(imageData, Math.max(0, x - radius), Math.max(0, y - radius));
+  };
+  
+  const floodFill = (ctx, startX, startY, fillColor) => {
+    const canvas = ctx.canvas;
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    
+    startX = Math.floor(startX);
+    startY = Math.floor(startY);
+    
+    const startPos = (startY * canvas.width + startX) * 4;
+    const startR = data[startPos];
+    const startG = data[startPos + 1];
+    const startB = data[startPos + 2];
+    
+    const rgb = parseInt(fillColor.slice(1), 16);
+    const fillR = (rgb >> 16) & 255;
+    const fillG = (rgb >> 8) & 255;
+    const fillB = rgb & 255;
+    const fillA = Math.floor(opacity * 255);
+    
+    if (startR === fillR && startG === fillG && startB === fillB) {
+      return;
+    }
+    
+    const colorMatch = (pos) => {
+      return data[pos] === startR && 
+             data[pos + 1] === startG && 
+             data[pos + 2] === startB;
+    };
+    
+    const setPixel = (x, y) => {
+      const pos = (y * canvas.width + x) * 4;
+      
+      if (fillPattern === 'solid') {
+        data[pos] = fillR;
+        data[pos + 1] = fillG;
+        data[pos + 2] = fillB;
+        data[pos + 3] = fillA;
+      } else if (fillPattern === 'dots') {
+        if ((x + y) % 8 < 2) {
+          data[pos] = fillR;
+          data[pos + 1] = fillG;
+          data[pos + 2] = fillB;
+          data[pos + 3] = fillA;
+        }
+      } else if (fillPattern === 'lines') {
+        if (y % 6 < 2) {
+          data[pos] = fillR;
+          data[pos + 1] = fillG;
+          data[pos + 2] = fillB;
+          data[pos + 3] = fillA;
+        }
+      } else if (fillPattern === 'crosshatch') {
+        if ((x % 8 < 2) || (y % 8 < 2)) {
+          data[pos] = fillR;
+          data[pos + 1] = fillG;
+          data[pos + 2] = fillB;
+          data[pos + 3] = fillA;
+        }
+      } else if (fillPattern === 'stipple') {
+        if (Math.random() < 0.3) {
+          data[pos] = fillR;
+          data[pos + 1] = fillG;
+          data[pos + 2] = fillB;
+          data[pos + 3] = fillA;
+        }
+      }
+    };
+    
+    const stack = [[startX, startY]];
+    const visited = new Set();
+    
+    while (stack.length > 0) {
+      const [x, y] = stack.pop();
+      
+      if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) {
+        continue;
+      }
+      
+      const key = `${x},${y}`;
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      
+      const pos = (y * canvas.width + x) * 4;
+      
+      if (!colorMatch(pos)) {
+        continue;
+      }
+      
+      setPixel(x, y);
+      
+      stack.push([x + 1, y]);
+      stack.push([x - 1, y]);
+      stack.push([x, y + 1]);
+      stack.push([x, y - 1]);
+    }
+    
+    ctx.putImageData(imageData, 0, 0);
+  };
+  
+  const drawShape = (ctx, x, y, shape) => {
+    if (shape === 'circles') drawConcentricCircles(ctx, x, y);
+    else if (shape === 'burst') drawRadiantBurst(ctx, x, y);
+    else if (shape === 'mesh') drawMeshCircle(ctx, x, y);
+    else if (shape === 'spiral') drawSpiral(ctx, x, y);
+    else if (shape === 'mandala') drawMandala(ctx, x, y);
+  };
+  
+  // Unified start handler for both mouse and touch
+  const startDrawing = (e) => {
+    if (isDraggingPanel) return;
+    
+    e.preventDefault(); // Prevent scrolling on touch
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const { x, y } = getEventCoords(e, canvas);
+    
+    if (fillMode) {
+      const ctx = canvas.getContext('2d');
+      applySymmetry(ctx, x, y, (sx, sy) => {
+        floodFill(ctx, sx, sy, selectedColor);
+      });
+      saveToHistory();
+      return;
+    }
+    
+    if (bleedEnabled) {
+      bleedStateRef.current = {
+        x,
+        y,
+        radius: 0,
+        maxRadius: brushSize * 4
+      };
+      setIsHolding(true);
+      setIsDrawing(true);
+      lastPosRef.current = { x, y };
+      return;
+    }
+    
+    if (shapeMode) {
+      const ctx = canvas.getContext('2d');
+      applySymmetry(ctx, x, y, (sx, sy) => {
+        drawShape(ctx, sx, sy, shapeMode);
+      });
+      saveToHistory();
+      return;
+    }
+    
+    setIsDrawing(true);
+    lastPosRef.current = { x, y };
+  };
+  
+  // Unified draw handler for both mouse and touch
+  const draw = (e) => {
+    if ((!isDrawing && !isHolding) || shapeMode) return;
+    
+    e.preventDefault(); // Prevent scrolling on touch
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getEventCoords(e, canvas);
+    
+    if (bleedEnabled && isHolding) {
+      const dx = x - lastPosRef.current.x;
+      const dy = y - lastPosRef.current.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance > 5) {
+        bleedStateRef.current.x = x;
+        bleedStateRef.current.y = y;
+        bleedStateRef.current.radius = Math.max(0, bleedStateRef.current.radius * 0.7);
+      }
+      
+      lastPosRef.current = { x, y };
+      return;
+    }
+    
+    if (blendMode) {
+      applySymmetry(ctx, x, y, (sx, sy) => {
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        let lastSx = lastPosRef.current.x;
+        let lastSy = lastPosRef.current.y;
+        
+        if (symmetryMode === 'mirror') {
+          const angleRad = (mirrorAngle * Math.PI) / 180;
+          const relX = sx - centerX;
+          const relY = sy - centerY;
+          
+          const origRelX = x - centerX;
+          const origRelY = y - centerY;
+          
+          const isMirror = Math.abs(relX - origRelX) > 1 || Math.abs(relY - origRelY) > 1;
+          
+          if (isMirror) {
+            const lastRelX = lastPosRef.current.x - centerX;
+            const lastRelY = lastPosRef.current.y - centerY;
+            
+            const cos2a = Math.cos(2 * angleRad);
+            const sin2a = Math.sin(2 * angleRad);
+            
+            const mirrorLastX = lastRelX * cos2a + lastRelY * sin2a;
+            const mirrorLastY = lastRelX * sin2a - lastRelY * cos2a;
+            
+            lastSx = mirrorLastX + centerX;
+            lastSy = mirrorLastY + centerY;
+          }
+        }
+        
+        drawBlend(ctx, sx, sy, lastSx, lastSy);
+      });
+      lastPosRef.current = { x, y };
+      return;
+    }
+    
+    applySymmetry(ctx, x, y, (sx, sy) => {
+      const origLastX = lastPosRef.current.x;
+      const origLastY = lastPosRef.current.y;
+      
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      
+      let lastSx = origLastX;
+      let lastSy = origLastY;
+      
+      if (symmetryMode === 'mirror') {
+        const relX = sx - centerX;
+        const relY = sy - centerY;
+        const origRelX = x - centerX;
+        const origRelY = y - centerY;
+        
+        const isMirror = Math.abs(relX - origRelX) > 1 || Math.abs(relY - origRelY) > 1;
+        
+        if (isMirror) {
+          const angleRad = (mirrorAngle * Math.PI) / 180;
+          const lastRelX = origLastX - centerX;
+          const lastRelY = origLastY - centerY;
+          
+          const cos2a = Math.cos(2 * angleRad);
+          const sin2a = Math.sin(2 * angleRad);
+          
+          const mirrorLastX = lastRelX * cos2a + lastRelY * sin2a;
+          const mirrorLastY = lastRelX * sin2a - lastRelY * cos2a;
+          
+          lastSx = mirrorLastX + centerX;
+          lastSy = mirrorLastY + centerY;
+        }
+      }
+      
+      if (brushMode === 'segments') {
+        drawSegmentedLine(ctx, lastSx, lastSy, sx, sy);
+      } else if (brushMode === 'dots') {
+        drawDots(ctx, sx, sy);
+      } else if (brushMode === 'radials') {
+        drawRadials(ctx, sx, sy);
+      } else if (brushMode === 'crosshatch') {
+        drawCrosshatch(ctx, sx, sy);
+      } else if (brushMode === 'stipple') {
+        drawStipple(ctx, sx, sy);
+      } else if (brushMode === 'fine') {
+        drawFineLine(ctx, lastSx, lastSy, sx, sy);
+      }
+    });
+    
+    lastPosRef.current = { x, y };
+  };
+  
+  const stopDrawing = () => {
+    if (isDrawing || isHolding) {
+      saveToHistory();
+    }
+    setIsDrawing(false);
+    setIsHolding(false);
+  };
+  
+  useEffect(() => {
+    if (!isHolding || !bleedEnabled) {
+      if (bleedAnimationRef.current) {
+        cancelAnimationFrame(bleedAnimationRef.current);
+        bleedAnimationRef.current = null;
+      }
+      return;
+    }
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const state = bleedStateRef.current;
+    
+    const animate = () => {
+      if (!isHolding || !bleedEnabled) return;
+      
+      state.radius += 1.5;
+      
+      if (state.radius > state.maxRadius) {
+        state.radius = state.maxRadius;
+      }
+      
+      // Draw with symmetry
+      const drawBleedPattern = (cx, cy) => {
+        ctx.globalAlpha = opacity * 0.3;
+        ctx.strokeStyle = selectedColor;
+        ctx.lineWidth = lineWeight;
+        
+        const numSegments = 24;
+        for (let i = 0; i < numSegments; i++) {
+          const angle = (i / numSegments) * Math.PI * 2;
+          const x1 = cx + Math.cos(angle) * state.radius;
+          const y1 = cy + Math.sin(angle) * state.radius;
+          const x2 = cx + Math.cos(angle) * (state.radius + 10);
+          const y2 = cy + Math.sin(angle) * (state.radius + 10);
+          
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        }
+      };
+      
+      // Apply symmetry to bleed
+      applySymmetry(ctx, state.x, state.y, drawBleedPattern);
+      
+      ctx.globalAlpha = 1;
+      
+      if (state.radius < state.maxRadius) {
+        bleedAnimationRef.current = requestAnimationFrame(animate);
+      } else {
+        bleedAnimationRef.current = null;
+      }
+    };
+    
+    if (bleedAnimationRef.current) {
+      cancelAnimationFrame(bleedAnimationRef.current);
+    }
+    bleedAnimationRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      if (bleedAnimationRef.current) {
+        cancelAnimationFrame(bleedAnimationRef.current);
+      }
+    };
+  }, [isHolding, bleedEnabled, opacity, selectedColor, lineWeight, symmetryMode, mirrorAngle]);
+  
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    undoHistoryRef.current = [];
+    saveToHistory();
+    setCanUndo(false);
+  };
+  
+  const saveImage = () => {
+    const canvas = canvasRef.current;
+    const link = document.createElement('a');
+    link.download = 'geometric-art.png';
+    link.href = canvas.toDataURL();
+    link.click();
+  };
+  
+  const saveAsJPEG = () => {
+    const canvas = canvasRef.current;
+    const link = document.createElement('a');
+    link.download = 'geometric-art.jpg';
+    link.href = canvas.toDataURL('image/jpeg', 0.95);
+    link.click();
+  };
+  
+  // Handler for starting panel drag - only from header
+  const handlePanelHeaderDown = (e) => {
+    e.stopPropagation(); // Prevent canvas drawing
+    e.preventDefault();
+    
+    setIsDraggingPanel(true);
+    
+    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+    
+    setDragOffset({
+      x: clientX - panelPosition.x,
+      y: clientY - panelPosition.y
+    });
+  };
+
+  return (
+    <div style={{
+      width: '100vw',
+      height: '100vh',
+      overflow: 'hidden',
+      background: '#0a0a0a',
+      fontFamily: '"Crimson Pro", "Cormorant Garamond", serif',
+      position: 'relative'
+    }}>
+      <canvas
+        ref={canvasRef}
+        onMouseDown={startDrawing}
+        onMouseMove={draw}
+        onMouseUp={stopDrawing}
+        onMouseLeave={stopDrawing}
+        onTouchStart={startDrawing}
+        onTouchMove={draw}
+        onTouchEnd={stopDrawing}
+        style={{ 
+          display: 'block',
+          cursor: 'crosshair',
+          touchAction: 'none'
+        }}
+      />
+      
+      {/* Toggle UI Button */}
+      <button
+        onClick={() => setShowUI(!showUI)}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          width: '50px',
+          height: '50px',
+          background: 'rgba(10, 20, 30, 0.85)',
+          backdropFilter: 'blur(20px)',
+          border: '1px solid rgba(107, 181, 199, 0.3)',
+          borderRadius: '50%',
+          color: '#f4e8d4',
+          cursor: 'pointer',
+          fontSize: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'all 0.3s ease',
+          boxShadow: '0 4px 15px rgba(0, 0, 0, 0.3)',
+          zIndex: 1000
+        }}
+        onMouseEnter={(e) => {
+          e.target.style.background = 'rgba(107, 181, 199, 0.2)';
+          e.target.style.borderColor = '#6bb5c7';
+        }}
+        onMouseLeave={(e) => {
+          e.target.style.background = 'rgba(10, 20, 30, 0.85)';
+          e.target.style.borderColor = 'rgba(107, 181, 199, 0.3)';
+        }}
+      >
+        {showUI ? '✕' : '☰'}
+      </button>
+      
+      {/* Control Panel */}
+      {showUI && (
+      <div 
+        style={{
+        position: 'absolute',
+        top: `${panelPosition.y}px`,
+        left: `${panelPosition.x}px`,
+        background: 'rgba(10, 20, 30, 0.85)',
+        backdropFilter: 'blur(20px)',
+        border: '1px solid rgba(107, 181, 199, 0.3)',
+        borderRadius: '20px',
+        padding: '0',
+        minWidth: '280px',
+        maxWidth: '90vw',
+        maxHeight: 'calc(100vh - 60px)',
+        overflowY: 'auto',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4), 0 0 60px rgba(107, 181, 199, 0.1)',
+        userSelect: 'none',
+        zIndex: 999,
+        touchAction: 'auto' // Allow scrolling within panel
+      }}>
+        {/* Draggable Header */}
+        <div
+          onMouseDown={handlePanelHeaderDown}
+          onTouchStart={handlePanelHeaderDown}
+          style={{
+            padding: '20px 30px',
+            cursor: isDraggingPanel ? 'grabbing' : 'grab',
+            borderBottom: '1px solid rgba(107, 181, 199, 0.2)',
+            touchAction: 'none' // Prevent scrolling when dragging header
+          }}
+        >
+          <h1 style={{
+            margin: 0,
+            fontSize: '28px',
+            fontWeight: '300',
+            letterSpacing: '2px',
+            color: '#f4e8d4',
+            textTransform: 'uppercase',
+            textAlign: 'center',
+            textShadow: '0 0 20px rgba(107, 181, 199, 0.3)'
+          }}>
+            <div style={{ 
+              fontSize: '10px', 
+              opacity: 0.4, 
+              letterSpacing: '4px',
+              marginBottom: '5px'
+            }}>
+              ⋮⋮⋮
+            </div>
+            Geometric Painter
+          </h1>
+        </div>
+        
+        {/* Panel Content */}
+        <div style={{ padding: '30px' }}>
+        
+        {/* Brush Mode */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '12px',
+            color: '#e6a660',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Brush Mode {shapeMode && '(Off)'}
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {[
+              { id: 'segments', label: 'Segments' },
+              { id: 'dots', label: 'Dots' },
+              { id: 'radials', label: 'Radials' },
+              { id: 'crosshatch', label: 'Hatch' },
+              { id: 'stipple', label: 'Stipple' },
+              { id: 'fine', label: 'Fine Line' }
+            ].map(mode => (
+              <button
+                key={mode.id}
+                onClick={() => {
+                  setBrushMode(mode.id);
+                  setShapeMode(null);
+                  setBlendMode(false);
+                  setFillMode(false);
+                }}
+                style={{
+                  padding: '10px',
+                  background: brushMode === mode.id && !shapeMode && !blendMode && !fillMode
+                    ? 'linear-gradient(135deg, #4a8a9e, #6bb5c7)'
+                    : 'rgba(255, 255, 255, 0.05)',
+                  border: brushMode === mode.id && !shapeMode && !blendMode && !fillMode
+                    ? '1px solid #6bb5c7' 
+                    : '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '8px',
+                  color: brushMode === mode.id && !shapeMode && !blendMode && !fillMode ? '#0a0a0a' : '#f4e8d4',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  letterSpacing: '1px',
+                  textTransform: 'uppercase',
+                  fontWeight: brushMode === mode.id && !shapeMode && !blendMode && !fillMode ? '600' : '400',
+                  transition: 'all 0.3s ease',
+                  fontFamily: 'inherit'
+                }}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        {/* Shape Stamps */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '12px',
+            color: '#e6a660',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Shape Stamps
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {[
+              { id: 'circles', label: 'Circles' },
+              { id: 'burst', label: 'Burst' },
+              { id: 'mesh', label: 'Mesh' },
+              { id: 'spiral', label: 'Spiral' },
+              { id: 'mandala', label: 'Mandala' }
+            ].map(shape => (
+              <button
+                key={shape.id}
+                onClick={() => {
+                  setShapeMode(shape.id);
+                  setBlendMode(false);
+                  setFillMode(false);
+                }}
+                style={{
+                  padding: '10px',
+                  background: shapeMode === shape.id
+                    ? 'linear-gradient(135deg, #4a8a9e, #6bb5c7)'
+                    : 'rgba(255, 255, 255, 0.05)',
+                  border: shapeMode === shape.id
+                    ? '1px solid #6bb5c7' 
+                    : '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '8px',
+                  color: shapeMode === shape.id ? '#0a0a0a' : '#f4e8d4',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  letterSpacing: '1px',
+                  textTransform: 'uppercase',
+                  fontWeight: shapeMode === shape.id ? '600' : '400',
+                  transition: 'all 0.3s ease',
+                  fontFamily: 'inherit'
+                }}
+              >
+                {shape.label}
+              </button>
+            ))}
+          </div>
+          
+          {/* Shape Fill Toggle */}
+          <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setShapeFilled(false)}
+              style={{
+                flex: 1,
+                padding: '8px',
+                background: !shapeFilled
+                  ? 'linear-gradient(135deg, #4a8a9e, #6bb5c7)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: !shapeFilled
+                  ? '1px solid #6bb5c7' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: !shapeFilled ? '#0a0a0a' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '9px',
+                letterSpacing: '1px',
+                textTransform: 'uppercase',
+                fontWeight: !shapeFilled ? '600' : '400',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Outline
+            </button>
+            <button
+              onClick={() => setShapeFilled(true)}
+              style={{
+                flex: 1,
+                padding: '8px',
+                background: shapeFilled
+                  ? 'linear-gradient(135deg, #4a8a9e, #6bb5c7)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: shapeFilled
+                  ? '1px solid #6bb5c7' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: shapeFilled ? '#0a0a0a' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '9px',
+                letterSpacing: '1px',
+                textTransform: 'uppercase',
+                fontWeight: shapeFilled ? '600' : '400',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Filled
+            </button>
+          </div>
+        </div>
+        
+        {/* Special Modes */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '12px',
+            color: '#7acab5',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Special Modes
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <button
+              onClick={() => {
+                setBleedEnabled(!bleedEnabled);
+                setShapeMode(null);
+                setBlendMode(false);
+                setFillMode(false);
+              }}
+              style={{
+                padding: '12px',
+                background: bleedEnabled
+                  ? 'linear-gradient(135deg, #5a9a8a, #7acab5)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: bleedEnabled
+                  ? '1px solid #7acab5' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: bleedEnabled ? '#0a0a0a' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: bleedEnabled ? '600' : '400',
+                letterSpacing: '0.5px',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Bleed Mode {bleedEnabled ? '✓' : ''}
+            </button>
+            <button
+              onClick={() => {
+                setBlendMode(!blendMode);
+                setShapeMode(null);
+                setBleedEnabled(false);
+                setFillMode(false);
+              }}
+              style={{
+                padding: '12px',
+                background: blendMode
+                  ? 'linear-gradient(135deg, #9a5a5a, #c45a4a)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: blendMode
+                  ? '1px solid #c45a4a' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: blendMode ? '#f4e8d4' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: blendMode ? '600' : '400',
+                letterSpacing: '0.5px',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Blend Mode {blendMode ? '✓' : ''}
+            </button>
+            <button
+              onClick={() => {
+                setFillMode(!fillMode);
+                setShapeMode(null);
+                setBleedEnabled(false);
+                setBlendMode(false);
+              }}
+              style={{
+                padding: '12px',
+                background: fillMode
+                  ? 'linear-gradient(135deg, #d4854d, #e6a660)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: fillMode
+                  ? '1px solid #e6a660' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: fillMode ? '#0a0a0a' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: fillMode ? '600' : '400',
+                letterSpacing: '0.5px',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Fill Mode {fillMode ? '✓' : ''}
+            </button>
+          </div>
+        </div>
+        
+        {fillMode && (
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '12px',
+            color: '#e6a660',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Fill Pattern
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {['solid', 'dots', 'lines', 'crosshatch', 'stipple'].map((pattern) => (
+              <button
+                key={pattern}
+                onClick={() => setFillPattern(pattern)}
+                style={{
+                  padding: '10px',
+                  background: fillPattern === pattern
+                    ? 'linear-gradient(135deg, #d4854d, #e6a660)'
+                    : 'rgba(255, 255, 255, 0.05)',
+                  border: fillPattern === pattern
+                    ? '1px solid #e6a660' 
+                    : '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '8px',
+                  color: fillPattern === pattern ? '#0a0a0a' : '#f4e8d4',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  letterSpacing: '1px',
+                  textTransform: 'capitalize',
+                  fontWeight: fillPattern === pattern ? '600' : '400',
+                  transition: 'all 0.3s ease',
+                  fontFamily: 'inherit'
+                }}
+              >
+                {pattern}
+              </button>
+            ))}
+          </div>
+        </div>
+        )}
+        
+        {/* Symmetry */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '12px',
+            color: '#6bb5c7',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Symmetry
+          </label>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: symmetryMode === 'mirror' ? '12px' : '0' }}>
+            <button
+              onClick={() => setSymmetryMode('none')}
+              style={{
+                flex: 1,
+                padding: '10px',
+                background: symmetryMode === 'none'
+                  ? 'linear-gradient(135deg, #4a8a9e, #6bb5c7)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: symmetryMode === 'none'
+                  ? '1px solid #6bb5c7' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: symmetryMode === 'none' ? '#0a0a0a' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '10px',
+                letterSpacing: '1px',
+                textTransform: 'uppercase',
+                fontWeight: symmetryMode === 'none' ? '600' : '400',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              None
+            </button>
+            <button
+              onClick={() => setSymmetryMode('mirror')}
+              style={{
+                flex: 1,
+                padding: '10px',
+                background: symmetryMode === 'mirror'
+                  ? 'linear-gradient(135deg, #4a8a9e, #6bb5c7)'
+                  : 'rgba(255, 255, 255, 0.05)',
+                border: symmetryMode === 'mirror'
+                  ? '1px solid #6bb5c7' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: symmetryMode === 'mirror' ? '#0a0a0a' : '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '10px',
+                letterSpacing: '1px',
+                textTransform: 'uppercase',
+                fontWeight: symmetryMode === 'mirror' ? '600' : '400',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Mirror
+            </button>
+          </div>
+          
+          {symmetryMode === 'mirror' && (
+          <div>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '8px', 
+              fontSize: '10px',
+              opacity: 0.7,
+              color: '#f4e8d4'
+            }}>
+              Axis Angle: {mirrorAngle}° {mirrorAngle === 90 ? '(Vertical)' : mirrorAngle === 0 ? '(Horizontal)' : ''}
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="180"
+              value={mirrorAngle}
+              onChange={(e) => setMirrorAngle(Number(e.target.value))}
+              style={{
+                width: '100%',
+                height: '6px',
+                borderRadius: '3px',
+                background: 'rgba(107, 181, 199, 0.2)',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            />
+          </div>
+          )}
+        </div>
+        
+        {/* Brush Size */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '8px',
+            color: '#e6a660',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Brush Size: {brushSize}
+          </label>
+          <input
+            type="range"
+            min="10"
+            max="150"
+            value={brushSize}
+            onChange={(e) => setBrushSize(Number(e.target.value))}
+            style={{
+              width: '100%',
+              height: '6px',
+              borderRadius: '3px',
+              background: 'rgba(230, 166, 96, 0.2)',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          />
+        </div>
+        
+        {/* Line Weight */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '8px',
+            color: '#e6a660',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Line Weight: {lineWeight}
+          </label>
+          <input
+            type="range"
+            min="0.5"
+            max="5"
+            step="0.5"
+            value={lineWeight}
+            onChange={(e) => setLineWeight(Number(e.target.value))}
+            style={{
+              width: '100%',
+              height: '6px',
+              borderRadius: '3px',
+              background: 'rgba(230, 166, 96, 0.2)',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          />
+        </div>
+        
+        {/* Opacity */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '8px',
+            color: '#e6a660',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Opacity: {Math.round(opacity * 100)}%
+          </label>
+          <input
+            type="range"
+            min="0.1"
+            max="1"
+            step="0.1"
+            value={opacity}
+            onChange={(e) => setOpacity(Number(e.target.value))}
+            style={{
+              width: '100%',
+              height: '6px',
+              borderRadius: '3px',
+              background: 'rgba(230, 166, 96, 0.2)',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          />
+        </div>
+        
+        {/* Color Palette */}
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: '12px',
+            color: '#6bb5c7',
+            fontSize: '11px',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            fontWeight: '600'
+          }}>
+            Color Palette
+          </label>
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(4, 1fr)', 
+            gap: '8px'
+          }}>
+            {colorPalette.map((c) => (
+              <button
+                key={c.color}
+                onClick={() => setSelectedColor(c.color)}
+                title={c.name}
+                style={{
+                  width: '100%',
+                  aspectRatio: '1',
+                  background: c.color,
+                  border: selectedColor === c.color 
+                    ? '3px solid #f4e8d4' 
+                    : '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease',
+                  boxShadow: selectedColor === c.color 
+                    ? `0 0 15px ${c.color}` 
+                    : 'none',
+                  transform: selectedColor === c.color ? 'scale(1.05)' : 'scale(1)'
+                }}
+              />
+            ))}
+          </div>
+        </div>
+        
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={clearCanvas}
+              style={{
+                flex: 1,
+                padding: '14px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '10px',
+                color: '#f4e8d4',
+                cursor: 'pointer',
+                fontSize: '11px',
+                letterSpacing: '1.5px',
+                textTransform: 'uppercase',
+                fontWeight: '600',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit'
+              }}
+            >
+              Clear
+            </button>
+            <button
+              onClick={saveImage}
+              style={{
+                flex: 1,
+                padding: '14px',
+                background: 'linear-gradient(135deg, #e6a660, #d4854d)',
+                border: '1px solid #e6a660',
+                borderRadius: '10px',
+                color: '#0a0a0a',
+                cursor: 'pointer',
+                fontSize: '11px',
+                letterSpacing: '1.5px',
+                textTransform: 'uppercase',
+                fontWeight: '600',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit',
+                boxShadow: '0 4px 15px rgba(230, 166, 96, 0.3)'
+              }}
+            >
+              PNG
+            </button>
+            <button
+              onClick={saveAsJPEG}
+              style={{
+                flex: 1,
+                padding: '14px',
+                background: 'linear-gradient(135deg, #7acab5, #5a9a8a)',
+                border: '1px solid #7acab5',
+                borderRadius: '10px',
+                color: '#0a0a0a',
+                cursor: 'pointer',
+                fontSize: '11px',
+                letterSpacing: '1.5px',
+                textTransform: 'uppercase',
+                fontWeight: '600',
+                transition: 'all 0.3s ease',
+                fontFamily: 'inherit',
+                boxShadow: '0 4px 15px rgba(122, 202, 181, 0.3)'
+              }}
+            >
+              JPEG
+            </button>
+          </div>
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            style={{
+              width: '100%',
+              padding: '14px',
+              background: !canUndo
+                ? 'rgba(255, 255, 255, 0.02)'
+                : 'rgba(107, 181, 199, 0.15)',
+              border: '1px solid rgba(107, 181, 199, 0.3)',
+              borderRadius: '10px',
+              color: !canUndo ? '#4a4a4a' : '#6bb5c7',
+              cursor: !canUndo ? 'not-allowed' : 'pointer',
+              fontSize: '11px',
+              letterSpacing: '1.5px',
+              textTransform: 'uppercase',
+              fontWeight: '600',
+              transition: 'all 0.3s ease',
+              fontFamily: 'inherit',
+              opacity: !canUndo ? 0.3 : 1
+            }}
+          >
+            ↶ Undo (Ctrl+Z)
+          </button>
+        </div>
+      </div>
+      )}
+      
+      {/* Instructions */}
+      {showUI && (
+      <div 
+        onClick={() => setShowInstructions(!showInstructions)}
+        style={{
+        position: 'absolute',
+        bottom: '30px',
+        right: '30px',
+        background: 'rgba(10, 20, 30, 0.7)',
+        backdropFilter: 'blur(20px)',
+        border: '1px solid rgba(107, 181, 199, 0.2)',
+        borderRadius: '15px',
+        padding: '20px 25px',
+        maxWidth: '320px',
+        color: '#f4e8d4',
+        fontSize: '13px',
+        lineHeight: '1.8',
+        fontWeight: '300',
+        letterSpacing: '0.5px',
+        cursor: 'pointer',
+        transition: 'all 0.3s ease',
+        userSelect: 'none'
+      }}
+      >
+        <p style={{ margin: '0 0 10px 0', color: '#e6a660', fontWeight: '600', fontSize: '11px', letterSpacing: '1.5px', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>How to Use</span>
+          <span style={{ fontSize: '14px', opacity: 0.6 }}>{showInstructions ? '▼' : '▶'}</span>
+        </p>
+        {!showInstructions && (
+          <p style={{ margin: 0, fontSize: '11px', opacity: 0.6, fontStyle: 'italic' }}>
+            Click to expand • Drag panel header to move
+          </p>
+        )}
+        {showInstructions && (
+        <>
+        <p style={{ margin: '0 0 10px 0', fontSize: '11px', opacity: 0.7, fontStyle: 'italic', color: '#7acab5' }}>
+          💡 Drag the panel header to reposition • Click here to collapse
+        </p>
+        <p style={{ margin: '0 0 10px 0' }}>
+          <strong style={{ color: '#6bb5c7' }}>Symmetry:</strong> Enable Mirror mode with adjustable axis angle (0-180°) to create perfectly symmetrical compositions at any orientation.
+        </p>
+        <p style={{ margin: '0 0 10px 0' }}>
+          <strong style={{ color: '#6bb5c7' }}>Brush Modes:</strong> Drag to draw segmented lines, dots, radial bursts, crosshatching, stippling, or fine lines.
+        </p>
+        <p style={{ margin: '0 0 10px 0' }}>
+          <strong style={{ color: '#e6a660' }}>Shape Stamps:</strong> Click once to place geometric patterns - concentric rings, radiant bursts, mesh circles, spirals, and mandalas.
+        </p>
+        <p style={{ margin: '0 0 10px 0' }}>
+          <strong style={{ color: '#7acab5' }}>Bleed Mode:</strong> Hold still to radiate patterns outward from one spot, or drag to trail extending patterns that follow your cursor.
+        </p>
+        <p style={{ margin: '0 0 10px 0' }}>
+          <strong style={{ color: '#c45a4a' }}>Blend Mode:</strong> Drag to smudge and blend colors underneath, creating fluid transitions.
+        </p>
+        <p style={{ margin: 0 }}>
+          <strong style={{ color: '#e6a660' }}>Fill Mode:</strong> Click to fill enclosed shapes with solid color or patterns (dots, lines, crosshatch, stipple).
+        </p>
+        </>
+        )}
+      </div>
+      )}
+    </div>
+  );
+};
+
+// Render the app
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<GeometricPainter />);
+    </script>
+</body>
+</html>
